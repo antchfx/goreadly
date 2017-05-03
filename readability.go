@@ -41,7 +41,8 @@ var (
 
 	sentenceRegexp = regexp.MustCompile(`\.( |$)`)
 
-	normalizeWhitespaceRegexp = regexp.MustCompile(`[\r\n\f]+`)
+	normalizeCRLFRegexp       = regexp.MustCompile(`(\r\n|\r|\n)+`)
+	normalizeWhitespaceRegexp = regexp.MustCompile(`\s{2,}`)
 )
 
 // A Document represents an article document object.
@@ -103,6 +104,31 @@ func (d *Document) parseTitle() string {
 }
 
 func (d *Document) parseContent() string {
+	// replace double br with paragraphs(p)
+	for _, n := range htmlquery.Find(d.root, "//br") {
+		if n.NextSibling == nil || n.Parent == nil {
+			continue
+		}
+		if n.NextSibling.Type == html.TextNode && strings.TrimSpace(n.NextSibling.Data) == "" {
+			n.Parent.RemoveChild(n.NextSibling)
+		}
+		if n.NextSibling.Type == html.ElementNode && n.NextSibling.Data == "br" {
+			n.Parent.RemoveChild(n.NextSibling)
+			if n.NextSibling.Type == html.TextNode {
+				t := n.NextSibling
+				n.Parent.RemoveChild(t)
+				p := &html.Node{
+					Data: "p",
+					Type: html.ElementNode,
+					Attr: make([]html.Attribute, 0),
+				}
+				p.AppendChild(t)
+				n.Parent.InsertBefore(p, n)
+				n.Parent.RemoveChild(n)
+			}
+		}
+	}
+
 	// remove unlikely candidates
 	htmlquery.FindEach(d.root, "//*", func(_ int, n *html.Node) {
 		switch n.Data {
@@ -281,7 +307,7 @@ func (d *Document) sanitize(content string) string {
 	if text == "" {
 		text = htmlquery.OutputHTML(node, false)
 	}
-	return normalizeWhitespaceRegexp.ReplaceAllString(text, "\n")
+	return normalizeCRLFRegexp.ReplaceAllString(normalizeWhitespaceRegexp.ReplaceAllString(text, " "), "\n")
 }
 
 func (d *Document) cleanConditionally(n *html.Node, tags ...string) {
