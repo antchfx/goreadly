@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -20,8 +18,6 @@ import (
 )
 
 var (
-	// Logger is logging debug output.
-	Logger = log.New(ioutil.Discard, "[readability] ", log.LstdFlags)
 	// MinTextLength specified the minimum length of content.
 	MinTextLength = 25
 
@@ -135,7 +131,7 @@ func (d *Document) parseContent() string {
 		case "script", "style", "noscript":
 			removeNodes(n)
 			return
-		case "html", "body":
+		case "html", "body", "article":
 			return
 		}
 		str := htmlquery.SelectAttr(n, "class") + htmlquery.SelectAttr(n, "id")
@@ -231,7 +227,6 @@ func (d *Document) parseContent() string {
 func (d *Document) sanitize(content string) string {
 	doc, err := htmlquery.Parse(strings.NewReader(content))
 	if err != nil {
-		Logger.Println("Unable to create document", err)
 		return ""
 	}
 	// clean out spurious headers from an element.
@@ -300,8 +295,8 @@ func (d *Document) sanitize(content string) string {
 	}
 
 	var buf bytes.Buffer
-	for node = node.FirstChild; node != nil; node = node.NextSibling {
-		fn(&buf, node)
+	for n := node.FirstChild; n != nil; n = n.NextSibling {
+		fn(&buf, n)
 	}
 	text := buf.String()
 	if text == "" {
@@ -336,31 +331,23 @@ func (d *Document) cleanConditionally(n *html.Node, tags ...string) {
 			contentLength := len(strings.TrimSpace(text))
 			linkDensity := d.getLinkDensity(n)
 			remove := false
-			reason := ""
 			if img > p && img > 1 {
-				reason = "too many images"
 				remove = true
 			} else if li > p && n.Data != "ul" && n.Data != "ol" {
-				reason = "less than 3x <p>s than <input>s"
 				remove = true
 			} else if input > (p / 3.0) {
 				remove = true
 			} else if contentLength < MinTextLength && (img == 0 || img > 2) {
-				reason = "too short content length without a single image"
 				remove = true
 			} else if weight < 25 && linkDensity > 0.2 {
-				reason = fmt.Sprintf("too many links for its weight (%f)", weight)
 				remove = true
 			} else if weight >= 25 && linkDensity > 0.5 {
-				reason = fmt.Sprintf("too many links for its weight (%f)", weight)
 				remove = true
 			} else if (embed == 1 && contentLength < 75) || embed > 1 {
-				reason = "<embed>s with too short a content length, or too many <embed>s"
 				remove = true
 			}
 
 			if remove {
-				Logger.Printf("Conditionally cleaned %s#%s.%s with weight %f and content score %f because it has %s\n", n.Data, htmlquery.SelectAttr(n, "id"), htmlquery.SelectAttr(n, "class"), weight, weight, reason)
 				removeNodes(n)
 			}
 		}
