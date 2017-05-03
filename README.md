@@ -23,7 +23,7 @@ import (
 )
 
 func main() {
-	doc, err := readability.LoadURL("https://www.engadget.com/2017/05/02/switch-zelda-nintendo-dlc-hard-mode-tingle/")
+	doc, err := readability.LoadURL(os.Args[1])
 	if err != nil {
 		panic(err)
 	}
