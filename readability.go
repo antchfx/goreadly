@@ -108,9 +108,9 @@ func (d *Document) parseContent() string {
 		if n.NextSibling.Type == html.TextNode && strings.TrimSpace(n.NextSibling.Data) == "" {
 			n.Parent.RemoveChild(n.NextSibling)
 		}
-		if n.NextSibling.Type == html.ElementNode && n.NextSibling.Data == "br" {
+		if n.NextSibling != nil && (n.NextSibling.Type == html.ElementNode && n.NextSibling.Data == "br") {
 			n.Parent.RemoveChild(n.NextSibling)
-			if n.NextSibling.Type == html.TextNode {
+			if n.NextSibling != nil && n.NextSibling.Type == html.TextNode {
 				t := n.NextSibling
 				n.Parent.RemoveChild(t)
 				p := &html.Node{
