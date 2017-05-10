@@ -453,9 +453,9 @@ var (
 	}
 )
 
-// LoadURL loads the HTML document from the specified URL.
-func LoadURL(url string) (*Document, error) {
-	resp, err := http.Get(url)
+// FromURL loads the HTML document from the specified URL.
+func FromURL(urlStr string) (*Document, error) {
+	resp, err := http.Get(urlStr)
 	if err != nil {
 		return nil, err
 	}
@@ -470,14 +470,19 @@ func LoadURL(url string) (*Document, error) {
 		return nil, fmt.Errorf("parsing HTML error: %s", err)
 	}
 	return &Document{
-		OriginalURL: url,
+		OriginalURL: urlStr,
 		respURL:     resp.Request.URL,
 		root:        node,
 	}, nil
 }
 
-// Parse parses the HTML document from the given Reader.
-func Parse(r io.Reader) (*Document, error) {
+// FromHTML loads the HTML documents.
+func FromHTML(doc *html.Node) (*Document, error) {
+	return &Document{root: doc}, nil
+}
+
+// FromReader reads from file stream.
+func FromReader(r io.Reader) (*Document, error) {
 	node, err := htmlquery.Parse(r)
 	if err != nil {
 		return nil, fmt.Errorf("parsing HTML error: %s", err)

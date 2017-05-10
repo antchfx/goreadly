@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	doc, err := readability.LoadURL(os.Args[1])
+	doc, err := readability.FromURL(os.Args[1])
 	if err != nil {
 		panic(err)
 	}
