@@ -143,27 +143,57 @@ func (d *Document) parseTitle() string {
 }
 
 func (d *Document) parseContent() string {
-	// replace double br with paragraphs(p)
+	// Replaces 2 or more successive <br> elements with a single <p>.
+	// Whitespace between <br> elements are ignored. For example:
+	// <div>foo<br>bar<br> <br><br>abc</div>
+	// will become:
+	// <div>foo<br>bar<p>abc</p></div>
+	nextElement := func(n *html.Node) (next *html.Node) {
+		// Finds the next element, starting from the given node, and ignoring
+		// whitespace in between. If the given node is an element, the same node is
+		// returned.
+		for next != nil && n.Type == html.TextNode && strings.TrimSpace(n.Data) == "" {
+			next = next.NextSibling
+		}
+		return
+	}
+
 	for _, n := range htmlquery.Find(d.root, "//br") {
-		if n.NextSibling == nil || n.Parent == nil {
-			continue
+		parent := n.Parent
+		replaced := false
+		// If we find a <br> chain, remove the <br>s until we hit another element
+		// or non-whitespace. This leaves behind the first <br> in the chain
+		// (which will be replaced with a <p> later).
+		for next := nextElement(n.NextSibling); next != nil && next.Data == "br"; next = nextElement(next) {
+			replaced = true
+			sibling := next.NextSibling
+			parent.RemoveChild(next)
+			next = sibling
 		}
-		if n.NextSibling.Type == html.TextNode && strings.TrimSpace(n.NextSibling.Data) == "" {
-			n.Parent.RemoveChild(n.NextSibling)
-		}
-		if n.NextSibling != nil && (n.NextSibling.Type == html.ElementNode && n.NextSibling.Data == "br") {
-			n.Parent.RemoveChild(n.NextSibling)
-			if n.NextSibling != nil && n.NextSibling.Type == html.TextNode {
-				t := n.NextSibling
-				n.Parent.RemoveChild(t)
-				p := &html.Node{
-					Data: "p",
-					Type: html.ElementNode,
-					Attr: make([]html.Attribute, 0),
+
+		// If we removed a <br> chain, replace the remaining <br> with a <p>. Add
+		// all sibling nodes as children of the <p> until we hit another <br>
+		// chain.
+		if replaced {
+			p := &html.Node{
+				Data: "p",
+				Type: html.ElementNode,
+				Attr: make([]html.Attribute, 0),
+			}
+			parent.InsertBefore(p, n)
+			parent.RemoveChild(n)
+			for next := p.NextSibling; next != nil; {
+				// If we've hit another <br><br>, we're done adding children to this <p>.
+				if next.Data == "br" {
+					if next := nextElement(next); next != nil && next.Data == "br" {
+						break
+					}
 				}
-				p.AppendChild(t)
-				n.Parent.InsertBefore(p, n)
-				n.Parent.RemoveChild(n)
+				// Otherwise, make this node a child of the new <p>.
+				sibling := next.NextSibling
+				parent.RemoveChild(next)
+				p.AppendChild(next)
+				next = sibling
 			}
 		}
 	}
