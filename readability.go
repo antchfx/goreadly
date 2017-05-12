@@ -166,7 +166,7 @@ func (d *Document) parseContent() string {
 	})
 
 	// turn all divs that don't have children block level elements into p's
-	htmlquery.FindEach(d.root, "//div", func(_ int, n *html.Node) {
+	for _, n := range htmlquery.Find(d.root, "//div") {
 		// Sites like http://mobile.slate.com encloses each paragraph with a DIV
 		// element. DIVs with only a P element inside and no text content can be
 		// safely converted into plain P elements to avoid confusing the scoring
@@ -197,7 +197,7 @@ func (d *Document) parseContent() string {
 				}
 			}
 		}
-	})
+	}
 
 	// loop through all paragraphs, and assign a score to them based on how content-y they look.
 	candidates := make(map[*html.Node]*candidate)
