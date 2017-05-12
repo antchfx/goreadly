@@ -21,8 +21,27 @@ var (
 	// MinTextLength specified the minimum length of content.
 	MinTextLength = 25
 
-	// AllowedHtmlTagAttrs defines the tag attrs list that can allowed appear on content.
-	AllowedHtmlTagAttrs = map[string]bool{
+	AllowedHTMLTag = map[string]bool{
+		"embed":  true,
+		"figure": true,
+		"div":    true,
+		"img":    true,
+		"p":      true,
+		"br":     true,
+		"a":      true,
+		"font":   true,
+		"h1":     true,
+		"h2":     true,
+		"h3":     true,
+		"h4":     true,
+		"h5":     true,
+		"h6":     true,
+		"span":   true,
+		"strong": true,
+	}
+
+	// AllowedTMLTagAttrs defines the tag attrs list that can allowed appear on content.
+	AllowedTMLTagAttrs = map[string]bool{
 		"src":  true,
 		"href": true,
 	}
@@ -296,6 +315,7 @@ func (d *Document) sanitize(content string) string {
 
 	d.cleanConditionally(doc, "table", "ul", "div")
 	node := htmlquery.FindOne(doc, "//body")
+
 	getAbsoluteUrl := func(path string) string {
 		if d.respURL == nil {
 			return path
@@ -328,7 +348,7 @@ func (d *Document) sanitize(content string) string {
 		case n.Type == html.TextNode:
 			buf.WriteString(n.Data)
 			return
-		case n.Type == html.CommentNode:
+		case n.Type == html.CommentNode || !AllowedHTMLTag[n.Data]:
 			return
 		}
 		// Check element n whether is created by readability package.
@@ -338,7 +358,7 @@ func (d *Document) sanitize(content string) string {
 		}
 
 		for _, attr := range n.Attr {
-			if !AllowedHtmlTagAttrs[attr.Key] {
+			if !AllowedTMLTagAttrs[attr.Key] {
 				continue
 			}
 			if (n.Data == "img" && attr.Key == "src") ||
