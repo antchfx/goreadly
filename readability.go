@@ -30,7 +30,7 @@ var (
 	blacklistCandidatesRegexp  = regexp.MustCompile(`(?i)popupbody`)
 	okMaybeItsACandidateRegexp = regexp.MustCompile(`(?i)and|article|body|column|main|shadow`)
 	unlikelyCandidatesRegexp   = regexp.MustCompile(`(?i)combx|comment|community|hidden|disqus|modal|extra|foot|header|menu|remark|rss|shoutbox|sidebar|sponsor|ad-break|agegate|pagination|pager|popup`)
-	divToPElementsRegexp       = regexp.MustCompile(`(?i)<(a|blockquote|dl|div|img|ol|p|pre|table|ul)`)
+	divToPElementsRegexp       = regexp.MustCompile(`(?i)(a|blockquote|dl|div|img|ol|p|pre|table|ul|select)`)
 
 	negativeRegexp = regexp.MustCompile(`(?i)combx|comment|com-|foot|footer|footnote|masthead|media|meta|outbrain|promo|related|scroll|shoutbox|sidebar|sponsor|shopping|tags|tool|widget`)
 	positiveRegexp = regexp.MustCompile(`(?i)article|body|content|entry|hentry|main|page|pagination|post|text|blog|story`)
@@ -73,6 +73,31 @@ func (d *Document) Content() string {
 		d.content = d.parseContent()
 	})
 	return d.content
+}
+
+// hasChildBlockElement determines whether element has any children block level elements.
+func hasChildBlockElement(n *html.Node) bool {
+	var hasBlock bool = false
+	htmlquery.FindEach(n, "descendant::*", func(_ int, n *html.Node) {
+		hasBlock = hasBlock || divToPElementsRegexp.MatchString(n.Data)
+	})
+	return hasBlock
+}
+
+// hasSinglePInsideElement checks if this node has only whitespace and a single P
+// element returns false if the DIV node contains non-empty text nodes
+// or if it contains no P or more than 1 element.
+func hasSinglePInsideElement(n *html.Node) (*html.Node, bool) {
+	var c, l int
+	var p *html.Node
+	htmlquery.FindEach(n, "p", func(_ int, n *html.Node) {
+		p = n
+		c++
+		htmlquery.FindEach(n, "text()", func(_ int, n *html.Node) {
+			l += len(strings.TrimSpace(n.Data))
+		})
+	})
+	return p, c == 1 && l > 0
 }
 
 func (d *Document) parseTitle() string {
@@ -139,13 +164,41 @@ func (d *Document) parseContent() string {
 			removeNodes(n)
 		}
 	})
+
 	// turn all divs that don't have children block level elements into p's
 	htmlquery.FindEach(d.root, "//div", func(_ int, n *html.Node) {
-		htmlStr := htmlquery.OutputHTML(n, false)
-		if !divToPElementsRegexp.MatchString(htmlStr) {
+		// Sites like http://mobile.slate.com encloses each paragraph with a DIV
+		// element. DIVs with only a P element inside and no text content can be
+		// safely converted into plain P elements to avoid confusing the scoring
+		// algorithm with DIVs with are, in practice, paragraphs.
+		if p, ok := hasSinglePInsideElement(n); ok {
+			n.RemoveChild(p)
+			n.Parent.InsertBefore(p, n)
+			n.Parent.RemoveChild(n)
+		} else if !hasChildBlockElement(n) {
 			n.Data = "p"
+		} else {
+			// EXPERIMENTAL
+			for _, n := range htmlquery.Find(n, "text()") {
+				if len(strings.TrimSpace(n.Data)) > 0 {
+					p := &html.Node{
+						Data: "p",
+						Type: html.ElementNode,
+						Attr: []html.Attribute{
+							html.Attribute{
+								Key: "class",
+								Val: "readability-styled",
+							}},
+					}
+
+					n.Parent.InsertBefore(p, n)
+					n.Parent.RemoveChild(n)
+					p.AppendChild(n)
+				}
+			}
 		}
 	})
+
 	// loop through all paragraphs, and assign a score to them based on how content-y they look.
 	candidates := make(map[*html.Node]*candidate)
 	htmlquery.FindEach(d.root, "//p|//td", func(_ int, n *html.Node) {
@@ -258,6 +311,17 @@ func (d *Document) sanitize(content string) string {
 		}
 		return u.String()
 	}
+	isFakeElement := func(n *html.Node) bool {
+		if n.Data != "p" {
+			return false
+		}
+		for _, attr := range n.Attr {
+			if attr.Key == "class" && attr.Val == "readability-styled" {
+				return true
+			}
+		}
+		return false
+	}
 	var fn func(*bytes.Buffer, *html.Node)
 	fn = func(buf *bytes.Buffer, n *html.Node) {
 		switch {
@@ -267,8 +331,12 @@ func (d *Document) sanitize(content string) string {
 		case n.Type == html.CommentNode:
 			return
 		}
+		// Check element n whether is created by readability package.
+		faked := isFakeElement(n)
+		if !faked {
+			buf.WriteString("<" + n.Data)
+		}
 
-		buf.WriteString("<" + n.Data)
 		for _, attr := range n.Attr {
 			if !AllowedHtmlTagAttrs[attr.Key] {
 				continue
@@ -280,16 +348,18 @@ func (d *Document) sanitize(content string) string {
 			}
 			buf.WriteString(" " + attr.Key + "=\"" + attr.Val + "\"")
 		}
-		if selfClosingHtmlTags[n.Data] {
-			buf.WriteString("/>")
-		} else {
-			buf.WriteString(">")
+		if !faked {
+			if selfClosingHtmlTags[n.Data] {
+				buf.WriteString("/>")
+			} else {
+				buf.WriteString(">")
+			}
 		}
 
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			fn(buf, child)
 		}
-		if !selfClosingHtmlTags[n.Data] {
+		if !faked && !selfClosingHtmlTags[n.Data] {
 			buf.WriteString("</" + n.Data + ">")
 		}
 	}
