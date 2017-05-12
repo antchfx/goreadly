@@ -21,7 +21,7 @@ var (
 	// MinTextLength specified the minimum length of content.
 	MinTextLength = 25
 
-	AllowedHTMLTag = map[string]bool{
+	AllowedHTMLTags = map[string]bool{
 		"embed":  true,
 		"figure": true,
 		"div":    true,
@@ -62,11 +62,10 @@ var (
 
 // A Document represents an article document object.
 type Document struct {
-	// OriginalURL is an original request URL.
-	OriginalURL string
+	// URL is an about the URL of the document.
+	URL *url.URL
 
 	root        *html.Node
-	respURL     *url.URL
 	content     string
 	contentOnce sync.Once
 	title       string
@@ -316,21 +315,6 @@ func (d *Document) sanitize(content string) string {
 	d.cleanConditionally(doc, "table", "ul", "div")
 	node := htmlquery.FindOne(doc, "//body")
 
-	getAbsoluteUrl := func(path string) string {
-		if d.respURL == nil {
-			return path
-		}
-		if strings.HasPrefix(path, "http://") ||
-			strings.HasPrefix(path, "https://") ||
-			strings.HasPrefix(path, "ftp://") {
-			return path
-		}
-		u, err := d.respURL.Parse(path)
-		if err != nil {
-			return path
-		}
-		return u.String()
-	}
 	isFakeElement := func(n *html.Node) bool {
 		if n.Data != "p" {
 			return false
@@ -348,7 +332,7 @@ func (d *Document) sanitize(content string) string {
 		case n.Type == html.TextNode:
 			buf.WriteString(n.Data)
 			return
-		case n.Type == html.CommentNode || !AllowedHTMLTag[n.Data]:
+		case n.Type == html.CommentNode || !AllowedHTMLTags[n.Data]:
 			return
 		}
 		// Check element n whether is created by readability package.
@@ -364,7 +348,7 @@ func (d *Document) sanitize(content string) string {
 			if (n.Data == "img" && attr.Key == "src") ||
 				(n.Data == "a" && attr.Key == "href") ||
 				(n.Data == "embed " && attr.Key == "src") {
-				attr.Val = getAbsoluteUrl(attr.Val)
+				attr.Val = d.toAbsoluteURL(attr.Val)
 			}
 			buf.WriteString(" " + attr.Key + "=\"" + attr.Val + "\"")
 		}
@@ -393,6 +377,21 @@ func (d *Document) sanitize(content string) string {
 		text = htmlquery.OutputHTML(node, false)
 	}
 	return normalizeCRLFRegexp.ReplaceAllString(normalizeWhitespaceRegexp.ReplaceAllString(text, " "), "\n")
+}
+
+func (d *Document) toAbsoluteURL(path string) string {
+	if d.URL == nil {
+		return path
+	}
+	if strings.HasPrefix(path, "http://") ||
+		strings.HasPrefix(path, "https://") ||
+		strings.HasPrefix(path, "ftp://") {
+		return path
+	}
+	if u, err := d.URL.Parse(path); err == nil {
+		return u.String()
+	}
+	return path
 }
 
 func (d *Document) cleanConditionally(n *html.Node, tags ...string) {
@@ -560,9 +559,8 @@ func FromURL(urlStr string) (*Document, error) {
 		return nil, fmt.Errorf("parsing HTML error: %s", err)
 	}
 	return &Document{
-		OriginalURL: urlStr,
-		respURL:     resp.Request.URL,
-		root:        node,
+		URL:  resp.Request.URL,
+		root: node,
 	}, nil
 }
 
