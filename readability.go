@@ -5,46 +5,17 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/antchfx/xquery/html"
 	"golang.org/x/net/html"
-	"golang.org/x/net/html/charset"
 )
 
 var (
 	// MinTextLength specified the minimum length of content.
 	MinTextLength = 25
-
-	AllowedHTMLTags = map[string]bool{
-		"embed":  true,
-		"figure": true,
-		"div":    true,
-		"img":    true,
-		"p":      true,
-		"br":     true,
-		"a":      true,
-		"font":   true,
-		"h1":     true,
-		"h2":     true,
-		"h3":     true,
-		"h4":     true,
-		"h5":     true,
-		"h6":     true,
-		"span":   true,
-		"strong": true,
-	}
-
-	// AllowedTMLTagAttrs defines the tag attrs list that can allowed appear on content.
-	AllowedTMLTagAttrs = map[string]bool{
-		"src":  true,
-		"href": true,
-	}
 
 	blacklistCandidatesRegexp  = regexp.MustCompile(`(?i)popupbody`)
 	okMaybeItsACandidateRegexp = regexp.MustCompile(`(?i)and|article|body|column|main|shadow`)
@@ -62,14 +33,7 @@ var (
 
 // A Document represents an article document object.
 type Document struct {
-	// URL is an about the URL of the document.
-	URL *url.URL
-
-	root        *html.Node
-	content     string
-	contentOnce sync.Once
-	title       string
-	titleOnce   sync.Once
+	root *html.Node
 }
 
 type candidate struct {
@@ -78,19 +42,13 @@ type candidate struct {
 }
 
 // Title returns article title of HTML page.
-func (d *Document) Title() string {
-	d.titleOnce.Do(func() {
-		d.title = d.parseTitle()
-	})
-	return d.title
+func (doc *Document) Title() string {
+	return doc.parseTitle()
 }
 
 // Content returns article content of HTML page.
-func (d *Document) Content() string {
-	d.contentOnce.Do(func() {
-		d.content = d.parseContent()
-	})
-	return d.content
+func (doc *Document) Content() string {
+	return doc.parseContent()
 }
 
 // hasChildBlockElement determines whether element has any children block level elements.
@@ -296,14 +254,15 @@ func (d *Document) parseContent() string {
 
 	// now that we have the top candidate, look through its siblings for content that might also be related.
 	// like preambles, content split by ads that we removed, etc.
-	var buf bytes.Buffer
+	var list []*html.Node
+
 	siblingScoreThreshold := float32(math.Max(10, float64(best.score*.2)))
 	for n := best.node.Parent.FirstChild; n != nil; n = n.NextSibling {
-		append := false
+		canAppend := false
 		if n == best.node {
-			append = true
+			canAppend = true
 		} else if c, ok := candidates[n]; ok && c.score >= siblingScoreThreshold {
-			append = true
+			canAppend = true
 		}
 
 		if n.Data == "p" {
@@ -311,39 +270,84 @@ func (d *Document) parseContent() string {
 			content := htmlquery.InnerText(n)
 			contentLength := utf8.RuneCountInString(content)
 			if contentLength >= 80 && linkDensity < .25 {
-				append = true
+				canAppend = true
 			} else if contentLength < 80 && linkDensity == 0 {
-				append = sentenceRegexp.MatchString(content)
+				canAppend = sentenceRegexp.MatchString(content)
 			}
 		}
-		if append {
-			html.Render(&buf, n)
+		if canAppend {
+			list = append(list, n)
 		}
 	}
 	// we have all of the content that we need.
 	// now we clean it up for presentation.
-	return d.sanitize(buf.String())
+	return d.sanitize(list)
 }
 
-func (d *Document) sanitize(content string) string {
-	doc, err := htmlquery.Parse(strings.NewReader(content))
-	if err != nil {
-		return ""
-	}
+func (d *Document) sanitize(a []*html.Node) string {
 	// clean out spurious headers from an element.
-	htmlquery.FindEach(doc, "//*", func(_ int, n *html.Node) {
+	b := a[:0]
+	for _, n := range a {
 		switch n.Data {
 		case "h1", "h2", "h3", "h4", "h5", "h6", "h7":
 			if d.classWeight(n) < 0 || d.getLinkDensity(n) > 0.33 {
-				removeNodes(n)
+				continue
 			}
 		case "input", "select", "textarea", "button", "object", "iframe", "embed":
-			removeNodes(n)
+			continue
 		}
-	})
+		b = append(b, n)
+	}
 
-	d.cleanConditionally(doc, "table", "ul", "div")
-	node := htmlquery.FindOne(doc, "//body")
+	c := b[:0]
+	for _, n := range b {
+		if n.Data == "table" || n.Data == "ul" || n.Data == "div" {
+			weight := float32(d.classWeight(n))
+			if weight < 0 {
+				continue
+			}
+			text := htmlquery.InnerText(n)
+			if strings.Count(text, ",")+strings.Count(text, "，") < 10 {
+				// if there are not very many commas, and the number of
+				// non-paragraph elements is more than paragraphs or other ominous signs, remove the element.
+				var (
+					p     = len(htmlquery.Find(n, "//p|//br"))
+					img   = len(htmlquery.Find(n, "//img"))
+					li    = len(htmlquery.Find(n, "//li")) - 100
+					embed = len(htmlquery.Find(n, "//embed[@src]"))
+					input = len(htmlquery.Find(n, "//input"))
+				)
+
+				contentLength := len(strings.TrimSpace(text))
+				linkDensity := d.getLinkDensity(n)
+				remove := false
+				if img > p && img > 1 {
+					remove = true
+				} else if li > p && n.Data != "ul" && n.Data != "ol" {
+					remove = true
+				} else if input > (p / 3.0) {
+					remove = true
+				} else if contentLength < MinTextLength && (img == 0 || img > 2) {
+					remove = true
+				} else if weight < 25 && linkDensity > 0.2 {
+					remove = true
+				} else if weight >= 25 && linkDensity > 0.5 {
+					remove = true
+				} else if (embed == 1 && contentLength < 75) || embed > 1 {
+					remove = true
+				}
+
+				if remove {
+					continue
+				}
+			}
+		}
+		c = append(c, n)
+	}
+
+	if len(c) == 0 {
+		return ""
+	}
 
 	isFakeElement := func(n *html.Node) bool {
 		if n.Data != "p" {
@@ -356,33 +360,23 @@ func (d *Document) sanitize(content string) string {
 		}
 		return false
 	}
+
 	var fn func(*bytes.Buffer, *html.Node)
 	fn = func(buf *bytes.Buffer, n *html.Node) {
 		switch {
 		case n.Type == html.TextNode:
 			buf.WriteString(n.Data)
 			return
-		case n.Type == html.CommentNode || !AllowedHTMLTags[n.Data]:
+		case n.Type == html.CommentNode:
 			return
 		}
 		// Check element n whether is created by readability package.
 		faked := isFakeElement(n)
 		if !faked {
 			buf.WriteString("<" + n.Data)
-		}
-
-		for _, attr := range n.Attr {
-			if !AllowedTMLTagAttrs[attr.Key] {
-				continue
+			for _, attr := range n.Attr {
+				buf.WriteString(" " + attr.Key + "=\"" + attr.Val + "\"")
 			}
-			if (n.Data == "img" && attr.Key == "src") ||
-				(n.Data == "a" && attr.Key == "href") ||
-				(n.Data == "embed " && attr.Key == "src") {
-				attr.Val = d.toAbsoluteURL(attr.Val)
-			}
-			buf.WriteString(" " + attr.Key + "=\"" + attr.Val + "\"")
-		}
-		if !faked {
 			if selfClosingHtmlTags[n.Data] {
 				buf.WriteString("/>")
 			} else {
@@ -399,29 +393,13 @@ func (d *Document) sanitize(content string) string {
 	}
 
 	var buf bytes.Buffer
-	for n := node.FirstChild; n != nil; n = n.NextSibling {
-		fn(&buf, n)
+	for _, node := range c {
+		for n := node.FirstChild; n != nil; n = n.NextSibling {
+			fn(&buf, n)
+		}
 	}
 	text := buf.String()
-	if text == "" {
-		text = htmlquery.OutputHTML(node, false)
-	}
 	return normalizeCRLFRegexp.ReplaceAllString(normalizeWhitespaceRegexp.ReplaceAllString(text, " "), "\n")
-}
-
-func (d *Document) toAbsoluteURL(path string) string {
-	if d.URL == nil {
-		return path
-	}
-	if strings.HasPrefix(path, "http://") ||
-		strings.HasPrefix(path, "https://") ||
-		strings.HasPrefix(path, "ftp://") {
-		return path
-	}
-	if u, err := d.URL.Parse(path); err == nil {
-		return u.String()
-	}
-	return path
 }
 
 func (d *Document) cleanConditionally(n *html.Node, tags ...string) {
@@ -572,35 +550,8 @@ var (
 	}
 )
 
-// FromURL loads the HTML document from the specified URL.
-func FromURL(urlStr string) (*Document, error) {
-	resp, err := http.Get(urlStr)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	r, err := charset.NewReader(resp.Body, resp.Header.Get("Content-Type"))
-	if err != nil {
-		return nil, err
-	}
-	node, err := htmlquery.Parse(r)
-	if err != nil {
-		return nil, fmt.Errorf("parsing HTML error: %s", err)
-	}
-	return &Document{
-		URL:  resp.Request.URL,
-		root: node,
-	}, nil
-}
-
-// FromHTML loads the HTML documents.
-func FromHTML(doc *html.Node) (*Document, error) {
-	return &Document{root: doc}, nil
-}
-
-// FromReader reads from file stream.
-func FromReader(r io.Reader) (*Document, error) {
+// NewDocument reads HTML documents.
+func NewDocument(r io.Reader) (*Document, error) {
 	node, err := htmlquery.Parse(r)
 	if err != nil {
 		return nil, fmt.Errorf("parsing HTML error: %s", err)
