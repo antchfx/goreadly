@@ -2,9 +2,11 @@ package readability
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"io"
 	"math"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -27,12 +29,34 @@ var (
 
 	sentenceRegexp = regexp.MustCompile(`\.( |$)`)
 
-	normalizeCRLFRegexp       = regexp.MustCompile(`(\r\n|\r|\n)+`)
-	normalizeWhitespaceRegexp = regexp.MustCompile(`\s{2,}`)
+	//normalizeCRLFRegexp       = regexp.MustCompile(`(\r\n|\r|\n)+`)
+	//normalizeWhitespaceRegexp = regexp.MustCompile(`\s{2,}`)
+
+	selfClosingHtmlTags = map[string]bool{
+		"area":   true,
+		"base":   true,
+		"embed":  true,
+		"input":  true,
+		"link":   true,
+		"meta":   true,
+		"param":  true,
+		"source": true,
+		"track":  true,
+		"hr":     true,
+		"img":    true,
+		"br":     true,
+	}
+
+	allowedHTMLTagAttrs = map[string]bool{
+		"src":  true,
+		"href": true,
+	}
 )
 
 // A Document represents an article document object.
 type Document struct {
+	URL *url.URL
+
 	Title, Body string
 }
 
@@ -90,7 +114,7 @@ func parseTitle(doc *html.Node) string {
 	return title
 }
 
-func parseBody(doc *html.Node) string {
+func parseBody(self *url.URL, doc *html.Node) string {
 	// Replaces 2 or more successive <br> elements with a single <p>.
 	// Whitespace between <br> elements are ignored. For example:
 	// <div>foo<br>bar<br> <br><br>abc</div>
@@ -270,10 +294,10 @@ func parseBody(doc *html.Node) string {
 	}
 	// we have all of the content that we need.
 	// now we clean it up for presentation.
-	return sanitize(list)
+	return sanitize(self, list)
 }
 
-func sanitize(a []*html.Node) string {
+func sanitize(u *url.URL, a []*html.Node) string {
 	// clean out spurious headers from an element.
 	b := a[:0]
 	for _, n := range a {
@@ -364,6 +388,19 @@ func sanitize(a []*html.Node) string {
 		if !faked {
 			buf.WriteString("<" + n.Data)
 			for _, attr := range n.Attr {
+				if !allowedHTMLTagAttrs[attr.Key] || strings.HasPrefix(attr.Val, "javascript:") {
+					continue
+				}
+				if attr.Key == "src" || attr.Key == "href" {
+					if !(strings.HasPrefix(attr.Val, "http://") ||
+						strings.HasPrefix(attr.Val, "https://") ||
+						strings.HasPrefix(attr.Val, "ftp://") ||
+						strings.HasPrefix(attr.Val, "mailto:")) {
+						if u, err := u.Parse(attr.Val); err == nil {
+							attr.Val = u.String()
+						}
+					}
+				}
 				buf.WriteString(" " + attr.Key + "=\"" + attr.Val + "\"")
 			}
 			if selfClosingHtmlTags[n.Data] {
@@ -387,8 +424,8 @@ func sanitize(a []*html.Node) string {
 			fn(&buf, n)
 		}
 	}
-	text := buf.String()
-	return normalizeCRLFRegexp.ReplaceAllString(normalizeWhitespaceRegexp.ReplaceAllString(text, " "), "\n")
+	return buf.String()
+	//return normalizeCRLFRegexp.ReplaceAllString(normalizeWhitespaceRegexp.ReplaceAllString(text, " "), "\n")
 }
 
 func cleanConditionally(n *html.Node, tags ...string) {
@@ -521,32 +558,27 @@ func removeNodes(n *html.Node) {
 	}
 }
 
-var (
-	selfClosingHtmlTags = map[string]bool{
-		"area":   true,
-		"base":   true,
-		"embed":  true,
-		"iframe": true,
-		"input":  true,
-		"link":   true,
-		"meta":   true,
-		"param":  true,
-		"source": true,
-		"track":  true,
-		"hr":     true,
-		"img":    true,
-		"br":     true,
-	}
-)
-
-// Read reads a document, removing noise HTML nodes.
-func Read(r io.Reader) (*Document, error) {
-	doc, err := htmlquery.Parse(r)
-	if err != nil {
-		return nil, fmt.Errorf("parsing HTML error: %s", err)
-	}
+func parseHTML(self *url.URL, doc *html.Node) (*Document, error) {
 	return &Document{
+		URL:   self,
 		Title: parseTitle(doc),
-		Body:  parseBody(doc),
+		Body:  parseBody(self, doc),
 	}, nil
+}
+
+// ParseResponse parses an HTTP document and convert its to readability.
+func ParseResponse(res *http.Response) (*Document, error) {
+	doc, err := htmlquery.Parse(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("htmlquery.Parse occured error: %s", err)
+	}
+	return parseHTML(res.Request.URL, doc)
+}
+
+// ParseResponse parses an HTTP document and convert its to readability.
+func ParseHTML(self *url.URL, doc *html.Node) (*Document, error) {
+	if self == nil {
+		return nil, errors.New("URL self is nil")
+	}
+	return parseHTML(self, doc)
 }
