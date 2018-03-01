@@ -48,8 +48,11 @@ var (
 	}
 
 	allowedHTMLTagAttrs = map[string]bool{
-		"src":  true,
-		"href": true,
+		"src":         true,
+		"href":        true,
+		"width":       true,
+		"height":      true,
+		"frameborder": true,
 	}
 )
 
