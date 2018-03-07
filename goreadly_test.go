@@ -1,19 +1,10 @@
-package readability
+package goreadly
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"testing"
 )
-
-func loadURL(url string) (io.ReadCloser, error) {
-	res, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	return res.Body, nil
-}
 
 func output(url string, doc *Document) {
 	fmt.Println(url)
@@ -31,12 +22,11 @@ func ExampleAll() {
 		"https://blogs.msdn.microsoft.com/dotnet/2018/02/27/announcing-entity-framework-core-2-1-preview-1/",
 	}
 	for _, url := range urls {
-		rc, err := loadURL(url)
+		res, err := http.Get(url)
 		if err != nil {
 			panic(err)
 		}
-		defer rc.Close()
-		doc, err := Read(rc)
+		doc, err := ParseResponse(res)
 		if err != nil {
 			panic(err)
 		}
