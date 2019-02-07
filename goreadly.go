@@ -68,10 +68,17 @@ type candidate struct {
 	score float32
 }
 
+func findeach(top *html.Node, expr string, cb func(int, *html.Node)) {
+	nodes := htmlquery.Find(top, expr)
+	for i, n := range nodes {
+		cb(i, n)
+	}
+}
+
 // hasChildBlockElement determines whether element has any children block level elements.
 func hasChildBlockElement(n *html.Node) bool {
 	var hasBlock bool = false
-	htmlquery.FindEach(n, "descendant::*", func(_ int, n *html.Node) {
+	findeach(n, "descendant::*", func(_ int, n *html.Node) {
 		hasBlock = hasBlock || divToPElementsRegexp.MatchString(n.Data)
 	})
 	return hasBlock
@@ -83,10 +90,10 @@ func hasChildBlockElement(n *html.Node) bool {
 func hasSinglePInsideElement(n *html.Node) (*html.Node, bool) {
 	var c, l int
 	var p *html.Node
-	htmlquery.FindEach(n, "p", func(_ int, n *html.Node) {
+	findeach(n, "p", func(_ int, n *html.Node) {
 		p = n
 		c++
-		htmlquery.FindEach(n, "text()", func(_ int, n *html.Node) {
+		findeach(n, "text()", func(_ int, n *html.Node) {
 			l += len(strings.TrimSpace(n.Data))
 		})
 	})
@@ -174,7 +181,7 @@ func parseBody(self *url.URL, doc *html.Node) string {
 	}
 
 	// remove unlikely candidates
-	htmlquery.FindEach(doc, "//*", func(_ int, n *html.Node) {
+	findeach(doc, "//*", func(_ int, n *html.Node) {
 		switch n.Data {
 		case "script", "style", "noscript":
 			removeNodes(n)
@@ -222,7 +229,7 @@ func parseBody(self *url.URL, doc *html.Node) string {
 	}
 	// loop through all paragraphs, and assign a score to them based on how content-y they look.
 	candidates := make(map[*html.Node]*candidate)
-	htmlquery.FindEach(doc, "//p | //td", func(_ int, n *html.Node) {
+	findeach(doc, "//p | //td", func(_ int, n *html.Node) {
 		text := htmlquery.InnerText(n)
 		count := utf8.RuneCountInString(text)
 		// if this paragraph is less than x chars, don't count it
@@ -436,7 +443,7 @@ func cleanConditionally(n *html.Node, tags ...string) {
 		tags[i] = "//" + tag
 	}
 	selector := strings.Join(tags, "|")
-	htmlquery.FindEach(n, selector, func(_ int, n *html.Node) {
+	findeach(n, selector, func(_ int, n *html.Node) {
 		weight := float32(classWeight(n))
 		if weight < 0 {
 			removeNodes(n)
