@@ -68,19 +68,12 @@ type candidate struct {
 	score float32
 }
 
-func findeach(top *html.Node, expr string, cb func(int, *html.Node)) {
-	nodes := htmlquery.Find(top, expr)
-	for i, n := range nodes {
-		cb(i, n)
-	}
-}
-
 // hasChildBlockElement determines whether element has any children block level elements.
 func hasChildBlockElement(n *html.Node) bool {
-	var hasBlock bool = false
-	findeach(n, "descendant::*", func(_ int, n *html.Node) {
+	var hasBlock bool
+	for _, n := range htmlquery.Find(n, "descendant::*") {
 		hasBlock = hasBlock || divToPElementsRegexp.MatchString(n.Data)
-	})
+	}
 	return hasBlock
 }
 
@@ -90,13 +83,13 @@ func hasChildBlockElement(n *html.Node) bool {
 func hasSinglePInsideElement(n *html.Node) (*html.Node, bool) {
 	var c, l int
 	var p *html.Node
-	findeach(n, "p", func(_ int, n *html.Node) {
+	for _, n := range htmlquery.Find(n, "p") {
 		p = n
 		c++
-		findeach(n, "text()", func(_ int, n *html.Node) {
-			l += len(strings.TrimSpace(n.Data))
-		})
-	})
+		for _, n2 := range htmlquery.Find(n, "text()") {
+			l += len(strings.TrimSpace(n2.Data))
+		}
+	}
 	return p, c == 1 && l > 0
 }
 
@@ -122,6 +115,15 @@ func parseTitle(doc *html.Node) string {
 		return betterTitle
 	}
 	return title
+}
+
+func multiExpr(top *html.Node, exprs ...string) []*html.Node {
+	var list []*html.Node
+	for _, expr := range exprs {
+		v := htmlquery.Find(top, expr)
+		list = append(list, v...)
+	}
+	return list
 }
 
 func parseBody(self *url.URL, doc *html.Node) string {
@@ -181,19 +183,19 @@ func parseBody(self *url.URL, doc *html.Node) string {
 	}
 
 	// remove unlikely candidates
-	findeach(doc, "//*", func(_ int, n *html.Node) {
+	for _, n := range htmlquery.Find(doc, "//*") {
 		switch n.Data {
 		case "script", "style", "noscript":
 			removeNodes(n)
-			return
+			continue
 		case "html", "body", "article":
-			return
+			continue
 		}
 		str := htmlquery.SelectAttr(n, "class") + htmlquery.SelectAttr(n, "id")
 		if blacklistCandidatesRegexp.MatchString(str) || (unlikelyCandidatesRegexp.MatchString(str) && !okMaybeItsACandidateRegexp.MatchString(str)) {
 			removeNodes(n)
 		}
-	})
+	}
 	// turn all divs that don't have children block level elements into p's
 	for _, n := range htmlquery.Find(doc, "//div") {
 		// Sites like http://mobile.slate.com encloses each paragraph with a DIV
@@ -229,12 +231,13 @@ func parseBody(self *url.URL, doc *html.Node) string {
 	}
 	// loop through all paragraphs, and assign a score to them based on how content-y they look.
 	candidates := make(map[*html.Node]*candidate)
-	findeach(doc, "//p | //td", func(_ int, n *html.Node) {
+
+	for _, n := range multiExpr(doc, "//p", "//td") {
 		text := htmlquery.InnerText(n)
 		count := utf8.RuneCountInString(text)
 		// if this paragraph is less than x chars, don't count it
 		if count < MinTextLength {
-			return
+			continue
 		}
 
 		parent := n.Parent
@@ -257,7 +260,7 @@ func parseBody(self *url.URL, doc *html.Node) string {
 		if grandparent != nil {
 			candidates[grandparent].score += contentScore / 2.0
 		}
-	})
+	}
 
 	// scale the final candidates score based on link density. Good content
 	// should have a relatively small link density (5% or less) and be mostly
@@ -334,7 +337,7 @@ func sanitize(u *url.URL, a []*html.Node) string {
 				// if there are not very many commas, and the number of
 				// non-paragraph elements is more than paragraphs or other ominous signs, remove the element.
 				var (
-					p     = len(htmlquery.Find(n, "//p | //br"))
+					p     = len(multiExpr(n, "//p", "//br"))
 					img   = len(htmlquery.Find(n, "//img"))
 					li    = len(htmlquery.Find(n, "//li")) - 100
 					embed = len(htmlquery.Find(n, "//embed[@src]"))
@@ -443,7 +446,7 @@ func cleanConditionally(n *html.Node, tags ...string) {
 		tags[i] = "//" + tag
 	}
 	selector := strings.Join(tags, "|")
-	findeach(n, selector, func(_ int, n *html.Node) {
+	for _, n := range htmlquery.Find(n, selector) {
 		weight := float32(classWeight(n))
 		if weight < 0 {
 			removeNodes(n)
@@ -454,7 +457,7 @@ func cleanConditionally(n *html.Node, tags ...string) {
 			// if there are not very many commas, and the number of
 			// non-paragraph elements is more than paragraphs or other ominous signs, remove the element.
 			var (
-				p     = len(htmlquery.Find(n, "//p | //br"))
+				p     = len(multiExpr(n, "//p", "//br"))
 				img   = len(htmlquery.Find(n, "//img"))
 				li    = len(htmlquery.Find(n, "//li")) - 100
 				embed = len(htmlquery.Find(n, "//embed[@src]"))
@@ -484,7 +487,7 @@ func cleanConditionally(n *html.Node, tags ...string) {
 				removeNodes(n)
 			}
 		}
-	})
+	}
 }
 
 func scoreNode(n *html.Node) *candidate {
